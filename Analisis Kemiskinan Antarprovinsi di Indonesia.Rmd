@@ -1,0 +1,228 @@
+---
+title: 'Analisis Kemiskinan Antarprovinsi di Indonesia: Pendekatan Regresi dan Clustering'
+author: "Salsa Rifqah Nuraini"
+date: "2026-10-08"
+output: html_document
+---
+
+
+Data bersumber dari BPS 
+
+```{r paket}
+#install.packages(c("tidyverse", "janitor", "here", "car","lmtest", "broom", "factoextra", "rmarkdown")) Hapus # jika belum install package
+library(tidyverse)
+library(janitor)
+library(here)
+library(car)
+library(lmtest)
+library(broom)
+library(factoextra)
+library(readxl)
+```
+
+#Membuka Data
+```{r data}
+data <- read_excel(here("data_provinsi.xlsx")) |>
+  mutate(across(-Provinsi, ~ as.numeric(str_replace(as.character(.x), ",", ".")))) |>
+  mutate(log_pdrb = log(pdrb), .keep = "unused")
+
+glimpse(data)
+```
+
+
+# Eksplorasi data
+cek kelengkapan dan ringkasan
+```{r cek-data}
+colSums(is.na(data))
+summary(data)
+```
+grafik hubungan tiap X dengan Y
+
+```{r scatter}
+data |>
+  pivot_longer(-c(Provinsi, p0), names_to = "variabel", values_to = "nilai") |>
+  ggplot(aes(x = nilai, y = p0)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ variabel, scales = "free_x") +
+  labs(x = NULL, y = "Penduduk miskin (%)",
+       title = "Hubungan indikator sosial-ekonomi dengan kemiskinan")
+```
+
+Secara visual, akses sanitasi layak menunjukkan hubungan paling jelas dengan kemiskinan, diikuti rata-rata lama sekolah dan PDRB per kapita. Sementara itu, TPT hampir tidak menunjukkan hubungan yang jelas. Terdapat dua outlier dengan tingkat kemiskinan sangat tinggi yang kemungkinan merupakan Papua Pegunungan dan Papua Tengah. Pada tahap pemodelan, akan diuji apakah hubungan sanitasi dan lama sekolah tetap kuat setelah kedua outlier tersebut dikeluarkan.
+
+#Model regresi dan uji asumsi
+```{r korelasi}
+data |>
+  select(-Provinsi) |>
+  cor() |>
+  round(2)
+```
+
+Korelasi terkuat dengan kemiskinan adalah akses sanitasi layak (r = -0,79), diikuti rata-rata lama sekolah (r = -0,56) dan log PDRB per kapita (r = -0,40). Ketiganya menunjukkan hubungan negatif, sedangkan TPT hampir tidak berkorelasi dengan kemiskinan (r = -0,19).
+
+Sanitasi dan rata-rata lama sekolah memiliki korelasi cukup tinggi (r = 0,76), sehingga terdapat kemungkinan informasi yang tumpang tindih dalam model regresi. Namun, perlu dilakukan pengecekan VIF untuk memastikan apakah terdapat masalah multikolinearitas.
+
+TPT juga berkorelasi positif dengan lama sekolah (r = 0,56). Penjelasan mengenai hubungan ini masih berupa dugaan dan perlu didukung oleh analisis atau sumber tambahan.
+
+#Model regresi linear berganda
+
+```{r model}
+model <- lm(p0 ~ tpt + rls + log_pdrb + sanitasi, data = data)
+summary(model)
+```
+Persamaan model
+Kemiskinan = 53,40 − 0,54·TPT + 1,58·RLS − 2,08·log(PDRB per kapita) − 0,39·Sanitasi
+
+Model menjelaskan sekitar 67% variasi kemiskinan antarprovinsi (R² = 0,666) dan signifikan secara keseluruhan (p < 0,001). Karena terdapat masalah heteroskedastisitas, digunakan galat baku robust HC3. Hasilnya, hanya akses sanitasi layak yang berpengaruh signifikan (p = 0,006), dengan kenaikan 1 poin persentase sanitasi berkaitan dengan penurunan kemiskinan sekitar 0,39 poin persentase. TPT, RLS, dan log PDRB tidak signifikan.
+
+Koefisien RLS yang bertanda positif berbeda dari korelasi sederhananya. Hal ini kemungkinan berkaitan dengan korelasinya yang cukup tinggi dengan sanitasi, sehingga koefisien RLS tidak ditafsirkan secara substantif. Dengan jumlah sampel hanya 38 provinsi, ketidaksignifikanan variabel lain belum tentu berarti tidak memiliki hubungan dengan kemiskinan.
+
+Supaya hasilnya lebih rapi dan ada selang kepercayaan, tambahkan:
+```{r koefisien}
+tidy(model, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+```
+##uji asumsi
+### Uji asumsi dan diagnostik
+
+Multikolinearitas (VIF):
+
+```{r vif}
+vif(model)
+```
+Hasil VIF menunjukkan tidak terdapat multikolinearitas yang serius karena seluruh variabel memiliki VIF < 5. RLS memiliki VIF tertinggi (4,35), sejalan dengan korelasinya yang cukup tinggi dengan sanitasi (r = 0,76). Kondisi ini dapat meningkatkan galat baku koefisien RLS dan membantu menjelaskan mengapa koefisiennya tidak signifikan serta berbeda arah dengan korelasi sederhananya.
+
+
+Normalitas residual:
+
+```{r normalitas}
+shapiro.test(residuals(model))
+```
+
+Uji normalitas residual menggunakan Shapiro-Wilk menunjukkan hasil W = 0,983 dengan p = 0,826, sehingga tidak terdapat bukti adanya pelanggaran asumsi normalitas. Hasil tersebut juga didukung oleh plot Q-Q yang menunjukkan titik-titik mengikuti garis diagonal. Namun, karena jumlah observasi hanya 38 provinsi, hasil uji perlu diinterpretasikan secara hati-hati dan tidak hanya bergantung pada satu pengujian.
+
+
+Homoskedastisitas (Breusch-Pagan):
+
+```{r heteroskedastisitas}
+bptest(model)
+```
+Cara membacanya
+H0: ragam residual konstan (homoskedastisitas).
+BP = 13,45 dengan df = 4: df-nya sama dengan jumlah variabel X di modelmu.
+p-value = 0,009: di bawah 0,05, jadi H0 ditolak. Ada bukti bahwa ragam residual tidak konstan (heteroskedastisitas).
+
+Uji Breusch-Pagan menunjukkan adanya heteroskedastisitas, sehingga galat baku pada model biasa dapat kurang akurat dan memengaruhi p-value serta selang kepercayaan. Oleh karena itu, digunakan galat baku robust HC3. Hasilnya, sanitasi tetap signifikan (p = 0,0055), sedangkan log PDRB tidak signifikan (p = 0,237).
+
+Plot diagnostik:
+
+```{r plot-diagnostik}
+par(mfrow = c(2, 2))
+plot(model)
+par(mfrow = c(1, 1))
+```
+
+
+
+Provinsi yang berpengaruh besar (Cook's distance):
+
+```{r cooks}
+data |>
+  mutate(cooks = cooks.distance(model)) |>
+  arrange(desc(cooks)) |>
+  select(Provinsi, cooks) |>
+  head(5)
+```
+
+### Galat baku yang tahan heteroskedastisitas
+
+```{r robust}
+#install.packages("sandwich") #jika belum ada
+library(sandwich)
+coeftest(model, vcov = vcovHC(model, type = "HC3"))
+```
+
+### Uji ketahanan: tanpa dua provinsi Papua yang berpengaruh
+
+```{r tanpa-papua}
+dat_sub <- data |>
+  filter(!str_detect(str_to_upper(Provinsi), "PAPUA PEGUNUNGAN|PAPUA TENGAH"))
+
+model_sub <- lm(p0 ~ tpt + rls + log_pdrb + sanitasi, data = dat_sub)
+summary(model_sub)
+bptest(model_sub)
+```
+Plot diagnostik menunjukkan bahwa normalitas residual masih dapat diterima, tetapi terdapat indikasi heteroskedastisitas yang sejalan dengan uji Breusch-Pagan pada model awal. Papua Pegunungan memiliki nilai Cook’s distance tertinggi (1,89), diikuti Papua Tengah (0,84), sehingga keduanya berpotensi memengaruhi hasil model. Setelah kedua provinsi dikeluarkan, model tetap signifikan secara keseluruhan (p < 0,001), dengan sanitasi tetap signifikan (p < 0,001) dan log PDRB menjadi signifikan (p = 0,013). Uji Breusch-Pagan pada model tanpa kedua provinsi memberikan p = 0,078, sehingga bukti heteroskedastisitas menjadi lebih lemah.
+
+#clustering
+
+## Segmentasi provinsi (clustering)
+
+```{r siapkan-cluster}
+x <- data |>
+  as.data.frame() |>
+  column_to_rownames("Provinsi") |>
+  select(-p0) |>
+  scale()
+```
+
+```{r jumlah-klaster}
+
+set.seed(123)
+fviz_nbclust(x, kmeans, method = "silhouette", nstart = 25)
+```
+Hasil clustering menunjukkan bahwa k = 2 memiliki silhouette tertinggi (0,64), tetapi pembagiannya hanya memisahkan Papua Tengah dan Papua Pegunungan sebagai kelompok tersendiri dari 36 provinsi lainnya. Karena hasil ini kurang informatif untuk menggambarkan pola antarprovinsi, k = 4 dipilih sebagai alternatif yang lebih bermakna dengan silhouette 0,39.
+
+Pada k = 4, dua provinsi pencilan tetap terpisah, sementara 36 provinsi lainnya terbagi menjadi tiga kelompok yang lebih mudah diinterpretasikan. Namun, nilai silhouette yang relatif rendah menunjukkan bahwa struktur klaster antarprovinsi tidak terlalu kuat dan batas antar kelompok masih cukup tumpang tindih.
+
+
+```{r kmeans}
+set.seed(123)
+km <- kmeans(x, centers = 4, nstart = 25)
+
+dat_k <- data |> mutate(klaster = factor(km$cluster))
+```
+
+```{r profil-klaster}
+dat_k |>
+  group_by(klaster) |>
+  summarise(n = n(),
+            across(c(p0, tpt, rls, sanitasi, log_pdrb), ~ round(mean(.x), 2)))
+```
+
+```{r anggota-klaster}
+dat_k |>
+  arrange(klaster, Provinsi) |>
+  select(klaster, Provinsi, p0)
+```
+
+Empat klaster terbentuk berdasarkan TPT, RLS, sanitasi, dan log PDRB per kapita. Klaster 1 terdiri dari Papua Tengah dan Papua Pegunungan dengan kondisi pembangunan paling tertinggal. Klaster 2 memiliki PDRB per kapita tertinggi dan kemiskinan relatif rendah, sedangkan Klaster 3 memiliki TPT tertinggi dan sanitasi relatif rendah. Klaster 4 merupakan kelompok dengan karakteristik pembangunan menengah.
+
+Namun, perbedaan tingkat kemiskinan antar klaster tidak signifikan (p = 0,23). Hal ini menunjukkan bahwa clustering mampu membedakan profil pembangunan provinsi, tetapi indikator yang digunakan belum sepenuhnya menjelaskan perbedaan tingkat kemiskinan.
+
+```{r plot-klaster}
+fviz_cluster(km, data = x, repel = TRUE)
+```
+Dim1 (58,5%) dan Dim2 (20,1%) menjelaskan sekitar 79% variasi data, sehingga cukup mewakili pola klaster. Papua Tengah dan Papua Pegunungan terlihat terpisah jelas, sedangkan tiga klaster lainnya banyak tumpang tindih. Hal ini menunjukkan batas antar klaster tidak terlalu tegas dan sejalan dengan nilai silhouette yang relatif rendah. Klaster 3 memiliki sebaran paling luas, dengan Bali sebagai titik yang relatif menyendiri.
+
+
+```{r silhouette-akhir}
+library(cluster)
+sil <- silhouette(km$cluster, dist(x))
+mean(sil[, "sil_width"])
+```
+Nilai silhouette k = 4 sebesar 0,39 menunjukkan struktur klaster masih lemah, meskipun tidak ada provinsi yang jelas salah klaster. Klaster 1 paling kohesif (0,48), sedangkan klaster lainnya memiliki kohesi lebih rendah. Beberapa provinsi berada di batas antar klaster, sehingga hasil clustering sebaiknya dipahami sebagai gambaran profil pembangunan, bukan pembagian provinsi yang mutlak.
+```{r silhouette-per-klaster}
+summary(sil)$clus.avg.widths
+```
+Sanitasi layak merupakan indikator yang paling konsisten berkaitan dengan kemiskinan. Kenaikan 1 poin persentase sanitasi berkaitan dengan penurunan kemiskinan sekitar 0,39 poin persentase dan hubungan ini tetap bertahan setelah dua provinsi Papua yang berpengaruh dikeluarkan. PDRB per kapita menunjukkan arah negatif, tetapi hasilnya belum konsisten. TPT dan RLS juga belum menunjukkan hubungan yang dapat dipastikan setelah variabel lain dikendalikan.
+
+K-means menghasilkan empat klaster dengan silhouette 0,39. Clustering membedakan profil pembangunan provinsi, tetapi perbedaan kemiskinan antar klaster tidak signifikan (p = 0,23).
+
+Keterbatasan
+Sampel hanya 38 provinsi sehingga kekuatan pengujian terbatas.
+Model mengalami heteroskedastisitas dan terdapat dua provinsi yang sangat berpengaruh.
+RLS berkorelasi tinggi dengan sanitasi, sehingga koefisiennya sulit diinterpretasikan secara terpisah.
+Struktur klaster relatif lemah (silhouette 0,39).
+Data bersifat agregat dan cross-sectional, sehingga hasil menunjukkan asosiasi, bukan sebab-akibat.
